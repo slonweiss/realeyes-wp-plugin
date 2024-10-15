@@ -16,7 +16,7 @@ class OAuth_Page_Protector {
 
         if (in_array($current_page_id, $protected_pages)) {
             error_log("OPP: Page is protected. Checking authentication.");
-            if (!$this->is_user_authenticated()) {
+            if (!$this->check_authentication()) {
                 error_log("OPP: User is not authenticated. Redirecting to OAuth login.");
                 $this->redirect_to_oauth_login();
             } else {
@@ -25,6 +25,22 @@ class OAuth_Page_Protector {
         } else {
             error_log("OPP: Page is not protected.");
         }
+    }
+
+    private function check_authentication() {
+        $token = $this->get_auth_token();
+        
+        if ($token) {
+            error_log("OPP: User is authenticated.");
+            return true;
+        }
+
+        if (!isset($_GET['code']) && !isset($_GET['state'])) {
+            error_log("OPP: User is not authenticated. Redirecting to OAuth login.");
+            $this->redirect_to_oauth_login();
+        }
+
+        return false;
     }
 
     private function is_user_authenticated() {
@@ -77,14 +93,24 @@ class OAuth_Page_Protector {
     }
 
     private function redirect_to_oauth_login() {
+        if (!session_id()) {
+            session_start();
+        }
+
         $client_id = get_option('opp_client_id');
         $auth_endpoint = get_option('opp_auth_endpoint');
         $redirect_uri = get_option('opp_redirect_uri');
 
-        $state = wp_create_nonce('oauth_state_' . time());
-        set_transient('opp_oauth_state', $state, 3600); // Set for 1 hour
+        // Always generate a new state
+        $state = bin2hex(random_bytes(16));
+        $_SESSION['opp_oauth_state'] = $state;
+        
+        error_log("OPP: Generated new state for OAuth login: " . $state);
 
-        error_log("OPP: Setting state: " . $state);
+        // Clear any existing access token
+        if (isset($_COOKIE['opp_access_token'])) {
+            setcookie('opp_access_token', '', time() - 3600, '/', '', true, true);
+        }
 
         $auth_url = add_query_arg(array(
             'client_id' => $client_id,
@@ -106,28 +132,53 @@ class OAuth_Page_Protector {
     }
 
     private function get_auth_token() {
+        if (!session_id()) {
+            session_start();
+        }
+
+        // First, check if we already have a valid access token
         if (isset($_COOKIE['opp_access_token'])) {
+            error_log("OPP: Access token found in cookie");
             return $_COOKIE['opp_access_token'];
         }
 
+        // If we don't have a token, check if we're in the process of getting one
         if (isset($_GET['code']) && isset($_GET['state'])) {
-            $saved_state = get_transient('opp_oauth_state');
+            $saved_state = isset($_SESSION['opp_oauth_state']) ? $_SESSION['opp_oauth_state'] : '';
+            $recent_states = get_transient('opp_recent_states') ?: array();
+
             error_log("OPP: Retrieving state. Received: " . $_GET['state'] . ", Saved: " . $saved_state);
 
-            if (!$saved_state || $_GET['state'] !== $saved_state) {
+            if (!$saved_state && !in_array($_GET['state'], $recent_states)) {
+                error_log("OPP: No saved state found and not in recent states. Possible invalid request.");
+                wp_die('Invalid state parameter. Please try again.');
+            }
+
+            if ($saved_state && $_GET['state'] !== $saved_state) {
                 error_log("OPP: Invalid state. Received: " . $_GET['state'] . ", Saved: " . $saved_state);
                 wp_die('Invalid state parameter. Please try again.');
             }
 
-            delete_transient('opp_oauth_state'); // Clear the used state
+            // Add the current state to recent states
+            $recent_states[] = $_GET['state'];
+            $recent_states = array_slice($recent_states, -5); // Keep only the last 5 states
+            set_transient('opp_recent_states', $recent_states, 300); // Store for 5 minutes
+
+            unset($_SESSION['opp_oauth_state']);
+            error_log("OPP: State validated and removed from session");
 
             $token = $this->exchange_code_for_token($_GET['code']);
             if ($token) {
                 setcookie('opp_access_token', $token, time() + 3600, '/', '', true, true);
-                return $token;
+                error_log("OPP: Token obtained and set in cookie");
+                
+                // Redirect to remove the code and state from the URL
+                wp_redirect(remove_query_arg(array('code', 'state')));
+                exit;
             }
         }
 
+        error_log("OPP: No valid token found");
         return false;
     }
 
