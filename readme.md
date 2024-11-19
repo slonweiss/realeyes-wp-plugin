@@ -7,11 +7,12 @@ Protect specific WordPress pages with OAuth/OIDC authentication and pass tokens 
 Free open-source OAuth Page Protector allows you to protect specific pages on your WordPress site using OAuth/OIDC authentication. It's perfect for sites that need to restrict access to certain content using existing OAuth providers.
 
 ### Features
-* Protect specific pages with OAuth authentication
-* Easy-to-use admin interface
-* Secure token handling
-* Chrome browser integration
-* Support for standard OAuth 2.0 providers
+
+- Protect specific pages with OAuth authentication
+- Easy-to-use admin interface
+- Secure token handling
+- Chrome browser integration
+- Support for standard OAuth 2.0 providers
 
 ## Installation
 
@@ -26,18 +27,20 @@ Free open-source OAuth Page Protector allows you to protect specific pages on yo
 
 Any standard OAuth 2.0 provider that supports the authorization code flow.
 
-
 ## Changelog
 
 ### 1.0.0
-* Initial release
+
+- Initial release
 
 ## Upgrade Notice
 
 ### 1.0.0
+
 Initial release
 
 ## Plugin Details
-* Contributor: Jonathan Weiss
-* Tags: oauth, authentication, page protection, security
-* License: ISC
+
+- Contributor: Jonathan Weiss
+- Tags: oauth, authentication, page protection, security
+- License: ISC
