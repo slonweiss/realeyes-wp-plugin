@@ -33,12 +33,6 @@ Any standard OAuth 2.0 provider that supports the authorization code flow.
 
 - Initial release
 
-## Upgrade Notice
-
-### 1.0.0
-
-Initial release
-
 ## Plugin Details
 
 - Contributor: Jonathan Weiss
