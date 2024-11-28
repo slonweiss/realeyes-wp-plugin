@@ -71,18 +71,34 @@ class OAuth_Page_Protector_Admin {
                         <td><input type="text" name="opp_token_verify_endpoint" value="<?php echo esc_attr(get_option('opp_token_verify_endpoint')); ?>" /></td>
                     </tr>
                     <tr>
-                        <th scope="row">Protected Pages</th>
+                        <th scope="row">Protected Content</th>
                         <td>
                             <?php
-                            $pages = get_pages();
+                            $args = array(
+                                'post_type' => array('page', 'post'),
+                                'posts_per_page' => -1,
+                                'orderby' => 'title',
+                                'order' => 'ASC'
+                            );
+                            
+                            $all_posts = get_posts($args);
                             $protected_pages = get_option('opp_protected_pages', array());
+                            
                             // Ensure $protected_pages is always an array
                             if (!is_array($protected_pages)) {
                                 $protected_pages = array();
                             }
-                            foreach ($pages as $page) {
-                                $checked = in_array($page->ID, $protected_pages) ? 'checked' : '';
-                                echo '<label><input type="checkbox" name="opp_protected_pages[]" value="' . $page->ID . '" ' . $checked . '> ' . $page->post_title . '</label><br>';
+                            
+                            foreach ($all_posts as $post) {
+                                $checked = in_array($post->ID, $protected_pages) ? 'checked' : '';
+                                $post_type = ucfirst($post->post_type);
+                                echo sprintf(
+                                    '<label><input type="checkbox" name="opp_protected_pages[]" value="%d" %s> [%s] %s</label><br>',
+                                    $post->ID,
+                                    $checked,
+                                    $post_type,
+                                    esc_html($post->post_title)
+                                );
                             }
                             ?>
                         </td>

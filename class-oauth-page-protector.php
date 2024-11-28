@@ -11,11 +11,24 @@ class OAuth_Page_Protector {
 
     public function run() {
         add_action('template_redirect', array($this, 'check_page_protection'));
+        add_action('template_redirect', function() {
+            $current_id = get_queried_object_id();
+            $protected_pages = get_option('opp_protected_pages', array());
+            
+            error_log("Debug - Current Page/Post ID: " . $current_id);
+            error_log("Debug - Protected IDs: " . print_r($protected_pages, true));
+            error_log("Debug - Current URL: " . $_SERVER['REQUEST_URI']);
+        }, 1);
     }
 
     public function check_page_protection() {
         // Get current page ID
-        $current_page_id = get_the_ID();
+        $current_page_id = get_queried_object_id();
+        
+        if (!$current_page_id) {
+            error_log("OPP: No valid post/page ID found");
+            return;
+        }
         
         // Get protected pages array
         $protected_pages = get_option('opp_protected_pages', array());
@@ -25,12 +38,12 @@ class OAuth_Page_Protector {
             $protected_pages = array();
         }
         
-        error_log("OPP: Checking protection for page ID: " . $current_page_id);
-        error_log("OPP: Protected pages: " . print_r($protected_pages, true));
+        error_log("OPP: Checking protection for content ID: " . $current_page_id);
+        error_log("OPP: Protected content IDs: " . print_r($protected_pages, true));
 
-        // Only check authentication for protected pages
+        // Only check authentication for protected content
         if (in_array($current_page_id, $protected_pages)) {
-            error_log("OPP: Page is protected. Checking authentication.");
+            error_log("OPP: Content is protected. Checking authentication.");
             if (!$this->check_authentication()) {
                 error_log("OPP: User is not authenticated. Redirecting to OAuth login.");
                 $this->redirect_to_oauth_login();
@@ -38,8 +51,7 @@ class OAuth_Page_Protector {
                 error_log("OPP: User is authenticated.");
             }
         } else {
-            error_log("OPP: Page is not protected.");
-            return; // Exit early for unprotected pages
+            error_log("OPP: Content is not protected.");
         }
     }
 
