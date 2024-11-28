@@ -11,7 +11,6 @@ class OAuth_Page_Protector {
 
     public function run() {
         add_action('template_redirect', array($this, 'check_page_protection'));
-        add_action('wp_enqueue_scripts', array($this, 'enqueue_scripts'));
     }
 
     public function check_page_protection() {
@@ -45,6 +44,8 @@ class OAuth_Page_Protector {
     }
 
     private function check_authentication() {
+        error_log("OPP: Checking authentication");
+        
         // First check for existing token
         if (isset($_COOKIE['opp_access_token'])) {
             error_log("OPP: Access token found in cookie");
@@ -53,43 +54,39 @@ class OAuth_Page_Protector {
         
         // Then check if we're handling an OAuth callback
         if (isset($_GET['code']) && isset($_GET['state'])) {
+            error_log("OPP: Processing OAuth callback");
             return $this->handle_oauth_callback();
         }
         
-        error_log("OPP: No valid token found");
+        error_log("OPP: No valid authentication found");
         return false;
     }
 
     private function handle_oauth_callback() {
         $received_state = $_GET['state'];
-        
-        error_log("OPP: Processing OAuth callback");
         error_log("OPP: - Received state: " . $received_state);
-        error_log("OPP: - Cookie exists: " . (isset($_COOKIE['opp_oauth_state']) ? 'yes' : 'no'));
-        error_log("OPP: - Cookie value: " . (isset($_COOKIE['opp_oauth_state']) ? $_COOKIE['opp_oauth_state'] : 'not set'));
-        error_log("OPP: - Transient exists: " . (get_transient('opp_state_' . $received_state) ? 'yes' : 'no'));
-
-        // Check both cookie and transient
-        $valid_cookie_state = isset($_COOKIE['opp_oauth_state']) && $_COOKIE['opp_oauth_state'] === $received_state;
-        $valid_transient_state = get_transient('opp_state_' . $received_state);
         
-        if (!$valid_cookie_state && !$valid_transient_state) {
-            error_log("OPP: State validation failed");
+        // Validate state
+        $valid_state = get_transient('opp_state_' . $received_state);
+        if (!$valid_state) {
+            error_log("OPP: Invalid state in callback");
             return false;
         }
 
         // Clean up state storage
         delete_transient('opp_state_' . $received_state);
-        setcookie('opp_oauth_state', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true);
+        setcookie('opp_oauth_state', '', time() - 3600, '/', COOKIE_DOMAIN);
         
+        // Exchange code for token
         $token = $this->exchange_code_for_token($_GET['code']);
         if ($token) {
+            // Set the token cookie
             setcookie(
                 'opp_access_token',
                 $token,
                 [
                     'expires' => time() + 3600,
-                    'path' => COOKIEPATH,
+                    'path' => '/',
                     'domain' => COOKIE_DOMAIN,
                     'secure' => is_ssl(),
                     'httponly' => true,
@@ -98,7 +95,7 @@ class OAuth_Page_Protector {
             );
             error_log("OPP: Token obtained and set in cookie");
             
-            // Redirect to remove the code and state from URL
+            // Redirect to clean URL
             wp_redirect(remove_query_arg(array('code', 'state')));
             exit;
         }
@@ -107,176 +104,43 @@ class OAuth_Page_Protector {
     }
 
     private function redirect_to_oauth_login() {
-        $client_id = get_option('opp_client_id');
-        $auth_endpoint = get_option('opp_auth_endpoint');
-        $redirect_uri = get_option('opp_redirect_uri');
+        // Only check for opp_oauth_state cookie if we're not processing a callback
+        if (!isset($_GET['code']) && isset($_COOKIE['opp_oauth_state'])) {
+            error_log("OPP: Preventing redirect loop - OAuth flow already in progress");
+            wp_die('Authentication in progress. Please try again in a few moments.');
+            return;
+        }
 
-        // Generate a new state
+        error_log("OPP: Setting up new OAuth login");
         $state = bin2hex(random_bytes(16));
         
-        error_log("OPP: Setting up new OAuth login");
-        error_log("OPP: - Generated state: " . $state);
+        // Store state in both cookie and transient
+        set_transient('opp_state_' . $state, true, 300);
         
-        // Store state in a transient with longer expiry
-        $transient_set = set_transient('opp_state_' . $state, true, 900); // 15 minutes expiry
-        error_log("OPP: - Transient set: " . ($transient_set ? 'Yes' : 'No'));
-        
-        // Check for headers
-        if (headers_sent($file, $line)) {
-            error_log("OPP: Headers already sent in $file:$line");
-        } else {
-            error_log("OPP: Headers not sent yet");
-        }
-        
-        // Set the cookie with SameSite=Lax
-        setcookie(
-            'opp_oauth_state',
-            $state,
-            [
-                'expires' => time() + 900,
-                'path' => COOKIEPATH,
-                'domain' => COOKIE_DOMAIN,
-                'secure' => is_ssl(),
-                'httponly' => true,
-                'samesite' => 'Lax' // Allow cookie to be sent with top-level navigation
-            ]
+        $cookie_options = array(
+            'expires' => time() + 300,
+            'path' => '/',
+            'domain' => COOKIE_DOMAIN,
+            'secure' => is_ssl(),
+            'httponly' => true,
+            'samesite' => 'Lax'
         );
         
-        error_log("OPP: - Cookie settings:");
-        error_log("OPP: -- Path: " . COOKIEPATH);
-        error_log("OPP: -- Domain: " . COOKIE_DOMAIN);
-        error_log("OPP: -- Secure: " . (is_ssl() ? 'Yes' : 'No'));
+        setcookie('opp_oauth_state', $state, $cookie_options);
         
-        // Clear any existing access token
-        if (isset($_COOKIE['opp_access_token'])) {
-            setcookie(
-                'opp_access_token',
-                '',
-                [
-                    'expires' => time() - 3600,
-                    'path' => COOKIEPATH,
-                    'domain' => COOKIE_DOMAIN,
-                    'secure' => is_ssl(),
-                    'httponly' => true,
-                    'samesite' => 'Lax'
-                ]
-            );
-        }
-
-        $auth_url = add_query_arg(array(
-            'client_id' => $client_id,
-            'redirect_uri' => $redirect_uri,
+        $params = array(
+            'client_id' => get_option('opp_client_id'),
+            'redirect_uri' => get_option('opp_redirect_uri'),
             'response_type' => 'code',
             'scope' => 'openid profile email',
             'state' => $state
-        ), $auth_endpoint);
-
-        error_log("OPP: About to redirect to auth URL: " . $auth_url);
-        error_log("OPP: - Final state value: " . $state);
+        );
         
-        // Force the cookie to be available immediately for debugging
-        $_COOKIE['opp_oauth_state'] = $state;
+        $auth_url = get_option('opp_auth_endpoint') . '?' . http_build_query($params);
         
-        error_log("OPP: - Current cookie value: " . (isset($_COOKIE['opp_oauth_state']) ? $_COOKIE['opp_oauth_state'] : 'not set'));
-        error_log("OPP: - Transient exists: " . (get_transient('opp_state_' . $state) ? 'yes' : 'no'));
-
-        // Ensure the redirect happens after cookie is set
+        error_log("OPP: Redirecting to auth URL: " . $auth_url);
         wp_redirect($auth_url);
         exit;
-    }
-
-    public function enqueue_scripts() {
-        // Only enqueue scripts and check auth token for protected pages
-        $current_page_id = get_the_ID();
-        $protected_pages = get_option('opp_protected_pages', array());
-        
-        if (!is_array($protected_pages)) {
-            $protected_pages = array();
-        }
-
-        wp_enqueue_script('oauth-page-protector', OPP_PLUGIN_URL . 'assets/js/oauth-page-protector.js', array('jquery'), OPP_VERSION, true);
-        
-        // Only pass auth token if page is protected
-        wp_localize_script('oauth-page-protector', 'oppData', array(
-            'authToken' => in_array($current_page_id, $protected_pages) ? $this->get_auth_token() : null,
-        ));
-    }
-
-    private function get_auth_token() {
-        if (isset($_COOKIE['opp_access_token'])) {
-            error_log("OPP: Access token found in cookie");
-            return $_COOKIE['opp_access_token'];
-        }
-
-        // Only proceed with OAuth flow if we're handling a callback
-        if (isset($_GET['code']) && isset($_GET['state'])) {
-            $received_state = $_GET['state'];
-            
-            error_log("OPP: Processing OAuth callback");
-            error_log("OPP: - Received state: " . $received_state);
-            error_log("OPP: - Cookie exists: " . (isset($_COOKIE['opp_oauth_state']) ? 'yes' : 'no'));
-            error_log("OPP: - Cookie value: " . (isset($_COOKIE['opp_oauth_state']) ? $_COOKIE['opp_oauth_state'] : 'not set'));
-            error_log("OPP: - Transient exists: " . (get_transient('opp_state_' . $received_state) ? 'yes' : 'no'));
-            error_log("OPP: - All cookies: " . print_r($_COOKIE, true));
-
-            // Check both cookie and transient
-            $valid_cookie_state = isset($_COOKIE['opp_oauth_state']) && $_COOKIE['opp_oauth_state'] === $received_state;
-            $valid_transient_state = get_transient('opp_state_' . $received_state);
-            
-            error_log("OPP: - Cookie state valid: " . ($valid_cookie_state ? 'yes' : 'no'));
-            error_log("OPP: - Transient state valid: " . ($valid_transient_state ? 'yes' : 'no'));
-
-            // If state validation fails, start a new OAuth flow instead of showing an error
-            if (!$valid_cookie_state && !$valid_transient_state) {
-                error_log("OPP: State validation failed - starting new OAuth flow");
-                $this->redirect_to_oauth_login();
-                exit;
-            }
-
-            error_log("OPP: State validated successfully");
-
-            // Clean up state storage
-            delete_transient('opp_state_' . $received_state);
-            setcookie(
-                'opp_oauth_state',
-                '',
-                [
-                    'expires' => time() - 3600,
-                    'path' => COOKIEPATH,
-                    'domain' => COOKIE_DOMAIN,
-                    'secure' => is_ssl(),
-                    'httponly' => true,
-                    'samesite' => 'Lax'
-                ]
-            );
-            
-            $token = $this->exchange_code_for_token($_GET['code']);
-            if ($token) {
-                setcookie(
-                    'opp_access_token',
-                    $token,
-                    [
-                        'expires' => time() + 3600,
-                        'path' => COOKIEPATH,
-                        'domain' => COOKIE_DOMAIN,
-                        'secure' => is_ssl(),
-                        'httponly' => true,
-                        'samesite' => 'Lax'
-                    ]
-                );
-                error_log("OPP: Token obtained and set in cookie");
-                
-                // Redirect to the original page without query parameters
-                $redirect_url = remove_query_arg(array('code', 'state'));
-                error_log("OPP: Redirecting to: " . $redirect_url);
-                wp_redirect($redirect_url);
-                exit;
-            }
-        }
-
-        // Instead of automatically starting OAuth flow, return false
-        error_log("OPP: No valid token found");
-        return false;
     }
 
     private function exchange_code_for_token($code) {
